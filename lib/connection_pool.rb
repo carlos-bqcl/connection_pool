@@ -38,6 +38,8 @@ end
 class ConnectionPool
   DEFAULTS = {size: 5, timeout: 5}
 
+  class LoggedOut < StandardError; end
+
   def self.wrap(options, &block)
     Wrapper.new(options, &block)
   end
@@ -58,12 +60,16 @@ class ConnectionPool
   def with(options = {})
     Thread.handle_interrupt(Exception => :never) do
       conn = checkout(options)
+      logged_out = false
       begin
         Thread.handle_interrupt(Exception => :immediate) do
           yield conn
+        rescue LoggedOut
+          logged_out = true
+          raise
         end
       ensure
-        checkin
+        checkin(logged_out)
       end
     end
   end
@@ -79,10 +85,10 @@ class ConnectionPool
     end
   end
 
-  def checkin
+  def checkin(logged_out)
     if ::Thread.current[@key]
       if ::Thread.current[@key_count] == 1
-        @available.push(::Thread.current[@key])
+        @available.push(::Thread.current[@key]) unless logged_out
         ::Thread.current[@key] = nil
         ::Thread.current[@key_count] = nil
       else
